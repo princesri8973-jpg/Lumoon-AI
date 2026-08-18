@@ -1,0 +1,16 @@
+{
+  "name": "lumoon-backend",
+  "version": "1.0.0",
+  "description": "Lumoon AI Backend",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.13.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0"
+  }
+}
