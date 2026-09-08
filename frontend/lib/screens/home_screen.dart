@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 import '../services/chat_storage_service.dart';
@@ -28,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<ChatSession> chatSessions = [];
 
   late ChatSession currentSession;
+
   PlatformFile? selectedFile;
 
   bool isLoading = false;
@@ -40,12 +42,18 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+
     currentSession = ChatSession.create();
     loadChatSessions();
   }
 
+  // ============================================================
+  // LOAD SAVED CHATS
+  // ============================================================
+
   Future<void> loadChatSessions() async {
-    final loadedSessions = await chatStorageService.loadSessions();
+    final loadedSessions =
+        await chatStorageService.loadSessions();
 
     if (!mounted) return;
 
@@ -53,6 +61,10 @@ class _HomeScreenState extends State<HomeScreen> {
       chatSessions = loadedSessions;
     });
   }
+
+  // ============================================================
+  // SAVE CURRENT CHAT
+  // ============================================================
 
   Future<void> saveCurrentChat() async {
     if (messages.isEmpty) return;
@@ -68,7 +80,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     currentSession.updatedAt = DateTime.now();
 
-    final firstUserMessage = messages.where((message) => message.isUser).firstOrNull;
+    final userMessages =
+        messages.where((message) => message.isUser);
+
+    final firstUserMessage =
+        userMessages.isNotEmpty ? userMessages.first : null;
 
     if (firstUserMessage != null) {
       String title = firstUserMessage.text
@@ -85,22 +101,32 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    chatSessions.removeWhere((chat) => chat.id == currentSession.id);
+    chatSessions.removeWhere(
+      (chat) => chat.id == currentSession.id,
+    );
+
     chatSessions.insert(0, currentSession);
 
     await chatStorageService.saveSessions(chatSessions);
   }
 
+  // ============================================================
+  // SEND MESSAGE
+  // ============================================================
+
   Future<void> sendMessage() async {
     final typedText = controller.text.trim();
     final attachedFile = selectedFile;
 
-    if ((typedText.isEmpty && attachedFile == null) || isLoading) {
+    if ((typedText.isEmpty && attachedFile == null) ||
+        isLoading) {
       return;
     }
 
     if (attachedFile != null && attachedFile.path == null) {
-      showMessage("File read panna mudila. Marubadiyum select pannu macha.");
+      showMessage(
+        "File read panna mudila. Marubadiyum select pannu macha.",
+      );
       return;
     }
 
@@ -130,12 +156,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await saveCurrentChat();
 
-    final reply = attachedFile == null
-        ? await ApiService.askLumoon(prompt)
-        : await ApiService.askLumoonWithFile(
-            prompt: prompt,
-            filePath: attachedFile.path!,
-          );
+    String reply;
+
+    if (attachedFile == null) {
+      reply = await ApiService.askLumoon(prompt);
+    } else {
+      reply = await ApiService.askLumoonWithFile(
+        prompt: prompt,
+        filePath: attachedFile.path!,
+      );
+    }
 
     if (!mounted) return;
 
@@ -157,45 +187,71 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // ============================================================
+  // FILE ATTACHMENT
+  // ============================================================
+
   Future<void> pickAttachment() async {
     if (isLoading) return;
 
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: [
-        "pdf",
-        "doc",
-        "docx",
-        "xls",
-        "xlsx",
-        "ppt",
-        "pptx",
-        "txt",
-        "csv",
-        "png",
-        "jpg",
-        "jpeg",
-        "webp",
-        "mp4",
-        "mov",
-        "webm",
-      ],
-    );
+    try {
+      final files = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: [
+          "pdf",
+          "doc",
+          "docx",
+          "xls",
+          "xlsx",
+          "ppt",
+          "pptx",
+          "txt",
+          "csv",
+          "png",
+          "jpg",
+          "jpeg",
+          "webp",
+          "mp4",
+          "mov",
+          "webm",
+        ],
+      );
 
-    if (result == null || result.files.isEmpty) return;
+      if (files.isEmpty) return;
 
-    final file = result.files.first;
-    const maxFileSize = 20 * 1024 * 1024;
+      final file = files.first;
 
-    if (file.size > maxFileSize) {
-      showMessage("20 MB-kulla irukkura file mattum select pannu macha.");
-      return;
+      const maxFileSize = 20 * 1024 * 1024;
+
+      if (await file.length() > maxFileSize) {
+        showMessage(
+          "20 MB-kulla irukkura file mattum select pannu macha.",
+        );
+        return;
+      }
+
+      if (file.path == null) {
+        showMessage(
+          "File path kedaikala. Vera file select pannu.",
+        );
+        return;
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        selectedFile = file;
+      });
+    } catch (e) {
+      showMessage(
+        "File select panna mudila: $e",
+      );
     }
-
-    setState(() {
-      selectedFile = file;
-    });
   }
+
+  // ============================================================
+  // MICROPHONE
+  // ============================================================
 
   Future<void> micPressed() async {
     if (isLoading) return;
@@ -210,7 +266,8 @@ class _HomeScreenState extends State<HomeScreen> {
     spokenText = "";
     hasSentVoiceMessage = false;
 
-    final started = await speechService.startListening(
+    final started =
+        await speechService.startListening(
       onResult: (text) {
         if (!mounted) return;
 
@@ -226,7 +283,8 @@ class _HomeScreenState extends State<HomeScreen> {
           isListening = false;
         });
 
-        if (spokenText.trim().isNotEmpty && !hasSentVoiceMessage) {
+        if (spokenText.trim().isNotEmpty &&
+            !hasSentVoiceMessage) {
           hasSentVoiceMessage = true;
           sendMessage();
         }
@@ -240,25 +298,40 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     if (!started) {
-      showMessage("Microphone access available illa macha.");
+      showMessage(
+        "Microphone access available illa macha.",
+      );
     }
   }
+
+  // ============================================================
+  // NEW CHAT
+  // ============================================================
 
   Future<void> createNewChat() async {
     await widget.voiceService.stop();
     await speechService.stopListening();
+
+    if (!mounted) return;
 
     setState(() {
       messages.clear();
       selectedFile = null;
       currentSession = ChatSession.create();
       isListening = false;
+      spokenText = "";
     });
   }
+
+  // ============================================================
+  // OPEN SAVED CHAT
+  // ============================================================
 
   Future<void> openChat(ChatSession session) async {
     await widget.voiceService.stop();
     await speechService.stopListening();
+
+    if (!mounted) return;
 
     setState(() {
       currentSession = session;
@@ -278,6 +351,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // ============================================================
+  // DELETE CHAT
+  // ============================================================
+
   Future<void> deleteChat(ChatSession session) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
@@ -290,18 +367,26 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           content: Text(
             "\"${session.title}\" chat delete aagum.",
-            style: const TextStyle(color: Colors.white70),
+            style: const TextStyle(
+              color: Colors.white70,
+            ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
               child: const Text("Cancel"),
             ),
             TextButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
               child: const Text(
                 "Delete",
-                style: TextStyle(color: Colors.redAccent),
+                style: TextStyle(
+                  color: Colors.redAccent,
+                ),
               ),
             ),
           ],
@@ -311,8 +396,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (shouldDelete != true) return;
 
+    if (!mounted) return;
+
     setState(() {
-      chatSessions.removeWhere((chat) => chat.id == session.id);
+      chatSessions.removeWhere(
+        (chat) => chat.id == session.id,
+      );
 
       if (currentSession.id == session.id) {
         messages.clear();
@@ -323,6 +412,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await chatStorageService.saveSessions(chatSessions);
   }
+
+  // ============================================================
+  // MUTE / UNMUTE
+  // ============================================================
 
   void toggleMute() {
     setState(() {
@@ -337,7 +430,258 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // ============================================================
+  // CREATE FILE DIALOG
+  // ============================================================
+
+  Future<void> showGenerateDialog() async {
+    String selectedType = "word";
+
+    final promptController = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: Colors.grey.shade900,
+              title: const Text(
+                "Create with Lumoon",
+                style: TextStyle(
+                  color: Colors.cyanAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedType,
+                      dropdownColor: Colors.grey.shade900,
+                      style: const TextStyle(
+                        color: Colors.white,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: "File type",
+                        labelStyle: TextStyle(
+                          color: Colors.white70,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(
+                            color: Colors.white24,
+                          ),
+                        ),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: "word",
+                          child: Text("Word Document"),
+                        ),
+                        DropdownMenuItem(
+                          value: "excel",
+                          child: Text("Excel Sheet"),
+                        ),
+                        DropdownMenuItem(
+                          value: "powerpoint",
+                          child: Text("PowerPoint"),
+                        ),
+                        DropdownMenuItem(
+                          value: "image",
+                          child: Text("Image"),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+
+                        setDialogState(() {
+                          selectedType = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: promptController,
+                      maxLines: 5,
+                      style: const TextStyle(
+                        color: Colors.white,
+                      ),
+                      decoration: const InputDecoration(
+                        hintText:
+                            "Enna create pannanum?",
+                        hintStyle: TextStyle(
+                          color: Colors.white38,
+                        ),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(dialogContext, false);
+                  },
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    if (promptController.text
+                        .trim()
+                        .isEmpty) {
+                      return;
+                    }
+
+                    Navigator.pop(dialogContext, true);
+                  },
+                  icon: const Icon(Icons.auto_awesome),
+                  label: const Text("Create"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != true) {
+      promptController.dispose();
+      return;
+    }
+
+    final prompt = promptController.text.trim();
+    promptController.dispose();
+
+    await createLumoonFile(
+      type: selectedType,
+      prompt: prompt,
+    );
+  }
+
+  // ============================================================
+  // CREATE FILE
+  // ============================================================
+
+  Future<void> createLumoonFile({
+    required String type,
+    required String prompt,
+  }) async {
+    if (isLoading) return;
+
+    setState(() {
+      isLoading = true;
+    });
+
+    final result = await ApiService.generateFile(
+      type: type,
+      prompt: prompt,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      isLoading = false;
+    });
+
+    if (result["success"] != true) {
+      showMessage(
+        result["error"]?.toString() ??
+            "File generation failed.",
+      );
+      return;
+    }
+
+    final url = result["url"]?.toString();
+
+    if (url == null || url.isEmpty) {
+      showMessage(
+        "File create aachu, aana URL kedaikala.",
+      );
+      return;
+    }
+
+    await showFileReadyDialog(
+      filename:
+          result["filename"]?.toString() ??
+              "Lumoon file",
+      url: url,
+    );
+  }
+
+  // ============================================================
+  // OPEN GENERATED FILE
+  // ============================================================
+
+  Future<void> showFileReadyDialog({
+    required String filename,
+    required String url,
+  }) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.grey.shade900,
+          title: const Row(
+            children: [
+              Icon(
+                Icons.check_circle,
+                color: Colors.greenAccent,
+              ),
+              SizedBox(width: 10),
+              Text(
+                "File Ready!",
+                style: TextStyle(
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            filename,
+            style: const TextStyle(
+              color: Colors.white70,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+              },
+              child: const Text("Close"),
+            ),
+            ElevatedButton.icon(
+              onPressed: () async {
+                final uri = Uri.parse(url);
+
+                final launched = await launchUrl(
+                  uri,
+                  mode: LaunchMode.externalApplication,
+                );
+
+                if (!launched && mounted) {
+                  showMessage(
+                    "File open panna mudila.",
+                  );
+                }
+              },
+              icon: const Icon(Icons.open_in_new),
+              label: const Text("Open"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // SNACKBAR
+  // ============================================================
+
   void showMessage(String message) {
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -346,6 +690,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ============================================================
+  // DISPOSE
+  // ============================================================
+
   @override
   void dispose() {
     controller.dispose();
@@ -353,6 +701,10 @@ class _HomeScreenState extends State<HomeScreen> {
     widget.voiceService.dispose();
     super.dispose();
   }
+
+  // ============================================================
+  // MAIN BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
@@ -363,6 +715,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           children: [
             buildHeader(),
+
             Expanded(
               child: messages.isEmpty
                   ? const Center(
@@ -370,16 +723,25 @@ class _HomeScreenState extends State<HomeScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(
-                            Icons.chat_bubble_outline,
-                            color: Colors.white24,
-                            size: 55,
+                            Icons.memory,
+                            color: Colors.cyanAccent,
+                            size: 60,
                           ),
-                          SizedBox(height: 15),
+                          SizedBox(height: 16),
                           Text(
-                            "Start a conversation with Lumoon",
+                            "LUMOON",
+                            style: TextStyle(
+                              color: Colors.cyanAccent,
+                              fontSize: 25,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            "Start a conversation",
                             style: TextStyle(
                               color: Colors.white38,
-                              fontSize: 16,
+                              fontSize: 15,
                             ),
                           ),
                         ],
@@ -398,6 +760,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     ),
             ),
+
             if (isLoading)
               const Padding(
                 padding: EdgeInsets.only(
@@ -422,13 +785,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         "Lumoon is thinking...",
                         style: TextStyle(
                           color: Colors.white54,
-                          fontSize: 14,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
+
             if (isListening)
               const Padding(
                 padding: EdgeInsets.only(
@@ -450,22 +813,30 @@ class _HomeScreenState extends State<HomeScreen> {
                         "Listening...",
                         style: TextStyle(
                           color: Colors.redAccent,
-                          fontSize: 14,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
+
             if (selectedFile != null)
               Container(
-                margin: const EdgeInsets.fromLTRB(14, 0, 14, 5),
-                padding: const EdgeInsets.only(left: 12),
+                margin: const EdgeInsets.fromLTRB(
+                  14,
+                  0,
+                  14,
+                  5,
+                ),
+                padding: const EdgeInsets.only(
+                  left: 12,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.cyan.withOpacity(0.10),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: Colors.cyanAccent.withOpacity(0.40),
+                    color:
+                        Colors.cyanAccent.withOpacity(0.40),
                   ),
                 ),
                 child: Row(
@@ -481,7 +852,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         selectedFile!.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white70),
+                        style: const TextStyle(
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
                     IconButton(
@@ -499,13 +872,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
+
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+              padding: const EdgeInsets.fromLTRB(
+                12,
+                6,
+                12,
+                12,
+              ),
               child: ChatInput(
                 controller: controller,
                 onSend: sendMessage,
                 onMic: micPressed,
                 onAttach: pickAttachment,
+                onGenerate: showGenerateDialog,
               ),
             ),
           ],
@@ -513,6 +893,10 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  // ============================================================
+  // HEADER
+  // ============================================================
 
   Widget buildHeader() {
     return Container(
@@ -526,7 +910,8 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (scaffoldContext) {
               return IconButton(
                 onPressed: () {
-                  Scaffold.of(scaffoldContext).openDrawer();
+                  Scaffold.of(scaffoldContext)
+                      .openDrawer();
                 },
                 tooltip: "Saved chats",
                 icon: const Icon(
@@ -536,6 +921,7 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
+
           Container(
             width: 52,
             height: 52,
@@ -560,10 +946,13 @@ class _HomeScreenState extends State<HomeScreen> {
               size: 28,
             ),
           ),
+
           const SizedBox(width: 14),
+
           const Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 Text(
                   "LUMOON",
@@ -584,6 +973,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
+
           IconButton(
             onPressed: createNewChat,
             tooltip: "New chat",
@@ -592,12 +982,18 @@ class _HomeScreenState extends State<HomeScreen> {
               color: Colors.cyanAccent,
             ),
           ),
+
           IconButton(
             onPressed: toggleMute,
-            tooltip: isMuted ? "Unmute voice" : "Mute voice",
+            tooltip:
+                isMuted ? "Unmute voice" : "Mute voice",
             icon: Icon(
-              isMuted ? Icons.volume_off : Icons.volume_up,
-              color: isMuted ? Colors.white54 : Colors.cyanAccent,
+              isMuted
+                  ? Icons.volume_off
+                  : Icons.volume_up,
+              color: isMuted
+                  ? Colors.white54
+                  : Colors.cyanAccent,
             ),
           ),
         ],
@@ -605,9 +1001,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ============================================================
+  // CHAT DRAWER
+  // ============================================================
+
   Widget buildChatDrawer() {
     return Drawer(
-      backgroundColor: Colors.grey.shade950,
+      backgroundColor: Colors.grey.shade900,
       child: SafeArea(
         child: Column(
           children: [
@@ -631,7 +1031,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () {
+                      Navigator.pop(context);
+                    },
                     icon: const Icon(
                       Icons.close,
                       color: Colors.white70,
@@ -640,8 +1042,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
             ),
+
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14),
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -653,30 +1057,44 @@ class _HomeScreenState extends State<HomeScreen> {
                   label: const Text("New chat"),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.cyanAccent,
-                    side: const BorderSide(color: Colors.cyanAccent),
+                    side: const BorderSide(
+                      color: Colors.cyanAccent,
+                    ),
                   ),
                 ),
               ),
             ),
+
             const SizedBox(height: 10),
-            const Divider(color: Colors.white12),
+
+            const Divider(
+              color: Colors.white12,
+            ),
+
             Expanded(
               child: chatSessions.isEmpty
                   ? const Center(
                       child: Text(
                         "Saved chats inga varum.",
-                        style: TextStyle(color: Colors.white38),
+                        style: TextStyle(
+                          color: Colors.white38,
+                        ),
                       ),
                     )
                   : ListView.builder(
                       itemCount: chatSessions.length,
                       itemBuilder: (context, index) {
-                        final chat = chatSessions[index];
-                        final isCurrent = chat.id == currentSession.id;
+                        final chat =
+                            chatSessions[index];
+
+                        final isCurrent =
+                            chat.id ==
+                                currentSession.id;
 
                         return ListTile(
                           selected: isCurrent,
-                          selectedTileColor: Colors.cyan.withOpacity(0.12),
+                          selectedTileColor:
+                              Colors.cyan.withOpacity(0.12),
                           leading: const Icon(
                             Icons.chat_bubble_outline,
                             color: Colors.cyanAccent,
@@ -685,11 +1103,16 @@ class _HomeScreenState extends State<HomeScreen> {
                           title: Text(
                             chat.title,
                             maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white),
+                            overflow:
+                                TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                            ),
                           ),
                           trailing: IconButton(
-                            onPressed: () => deleteChat(chat),
+                            onPressed: () {
+                              deleteChat(chat);
+                            },
                             tooltip: "Delete chat",
                             icon: const Icon(
                               Icons.delete_outline,
@@ -712,6 +1135,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// ============================================================
+// CHAT MESSAGE MODEL
+// ============================================================
+
 class ChatMessage {
   final String text;
   final bool isUser;
@@ -721,6 +1148,10 @@ class ChatMessage {
     required this.isUser,
   });
 }
+
+// ============================================================
+// CHAT BUBBLE
+// ============================================================
 
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
@@ -735,12 +1166,17 @@ class ChatBubble extends StatelessWidget {
     final bool isUser = message.isUser;
 
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: isUser
+          ? Alignment.centerRight
+          : Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.82,
+          maxWidth:
+              MediaQuery.of(context).size.width * 0.82,
         ),
-        margin: const EdgeInsets.only(bottom: 14),
+        margin: const EdgeInsets.only(
+          bottom: 14,
+        ),
         padding: const EdgeInsets.symmetric(
           horizontal: 18,
           vertical: 14,
@@ -752,8 +1188,10 @@ class ChatBubble extends StatelessWidget {
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(18),
             topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(isUser ? 18 : 4),
-            bottomRight: Radius.circular(isUser ? 4 : 18),
+            bottomLeft:
+                Radius.circular(isUser ? 18 : 4),
+            bottomRight:
+                Radius.circular(isUser ? 4 : 18),
           ),
           border: Border.all(
             color: isUser
@@ -762,13 +1200,16 @@ class ChatBubble extends StatelessWidget {
           ),
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  isUser ? Icons.person_outline : Icons.memory,
+                  isUser
+                      ? Icons.person_outline
+                      : Icons.memory,
                   size: 18,
                   color: Colors.cyanAccent,
                 ),
@@ -783,7 +1224,9 @@ class ChatBubble extends StatelessWidget {
                 ),
               ],
             ),
+
             const SizedBox(height: 8),
+
             Text(
               message.text,
               style: const TextStyle(
@@ -796,17 +1239,5 @@ class ChatBubble extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-extension FirstOrNullExtension<T> on Iterable<T> {
-  T? get firstOrNull {
-    final iterator = this.iterator;
-
-    if (iterator.moveNext()) {
-      return iterator.current;
-    }
-
-    return null;
   }
 }

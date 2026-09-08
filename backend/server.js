@@ -5,6 +5,8 @@ const cors = require("cors");
 
 const chatRoute = require("./routes/chat");
 
+const generateRoute = require("./routes/generate");
+
 const app = express();
 
 // Middlewares
@@ -21,6 +23,14 @@ app.get("/", (req, res) => {
 
 // Chat API
 app.use("/chat", chatRoute);
+app.use("/generate", generateRoute);
+
+app.use(
+  "/generated",
+  express.static(
+    require("path").join(__dirname, "generated")
+  )
+);
 
 // Start Server
 const PORT = process.env.PORT || 3000;
