@@ -4,12 +4,14 @@ class ChatInput extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
   final VoidCallback onMic;
+  final VoidCallback onAttach;
 
   const ChatInput({
     super.key,
     required this.controller,
     required this.onSend,
     required this.onMic,
+    required this.onAttach,
   });
 
   @override
@@ -25,6 +27,14 @@ class ChatInput extends StatelessWidget {
       ),
       child: Row(
         children: [
+          IconButton(
+            onPressed: onAttach,
+            tooltip: "Attach document",
+            icon: const Icon(
+              Icons.attach_file,
+              color: Colors.cyanAccent,
+            ),
+          ),
           Expanded(
             child: TextField(
               controller: controller,
@@ -36,7 +46,6 @@ class ChatInput extends StatelessWidget {
               ),
             ),
           ),
-
           IconButton(
             onPressed: onMic,
             icon: const Icon(
@@ -44,7 +53,6 @@ class ChatInput extends StatelessWidget {
               color: Colors.cyanAccent,
             ),
           ),
-
           IconButton(
             onPressed: onSend,
             icon: const Icon(

@@ -1,5 +1,8 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
 import '../services/api_service.dart';
+import '../services/chat_storage_service.dart';
 import '../services/speech_service.dart';
 import '../services/voice_service.dart';
 import '../widgets/chat_input.dart';
@@ -19,35 +22,120 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController controller = TextEditingController();
   final SpeechService speechService = SpeechService();
+  final ChatStorageService chatStorageService = ChatStorageService();
 
   final List<ChatMessage> messages = [];
+  List<ChatSession> chatSessions = [];
+
+  late ChatSession currentSession;
+  PlatformFile? selectedFile;
 
   bool isLoading = false;
   bool isListening = false;
   bool hasSentVoiceMessage = false;
+  bool isMuted = false;
 
   String spokenText = "";
 
-  Future<void> sendMessage() async {
-    final text = controller.text.trim();
+  @override
+  void initState() {
+    super.initState();
+    currentSession = ChatSession.create();
+    loadChatSessions();
+  }
 
-    if (text.isEmpty || isLoading) return;
+  Future<void> loadChatSessions() async {
+    final loadedSessions = await chatStorageService.loadSessions();
+
+    if (!mounted) return;
+
+    setState(() {
+      chatSessions = loadedSessions;
+    });
+  }
+
+  Future<void> saveCurrentChat() async {
+    if (messages.isEmpty) return;
+
+    currentSession.messages = messages
+        .map(
+          (message) => StoredChatMessage(
+            text: message.text,
+            isUser: message.isUser,
+          ),
+        )
+        .toList();
+
+    currentSession.updatedAt = DateTime.now();
+
+    final firstUserMessage = messages.where((message) => message.isUser).firstOrNull;
+
+    if (firstUserMessage != null) {
+      String title = firstUserMessage.text
+          .replaceAll("\n", " ")
+          .replaceAll("📎", "")
+          .trim();
+
+      if (title.length > 28) {
+        title = "${title.substring(0, 28)}...";
+      }
+
+      if (title.isNotEmpty) {
+        currentSession.title = title;
+      }
+    }
+
+    chatSessions.removeWhere((chat) => chat.id == currentSession.id);
+    chatSessions.insert(0, currentSession);
+
+    await chatStorageService.saveSessions(chatSessions);
+  }
+
+  Future<void> sendMessage() async {
+    final typedText = controller.text.trim();
+    final attachedFile = selectedFile;
+
+    if ((typedText.isEmpty && attachedFile == null) || isLoading) {
+      return;
+    }
+
+    if (attachedFile != null && attachedFile.path == null) {
+      showMessage("File read panna mudila. Marubadiyum select pannu macha.");
+      return;
+    }
 
     await widget.voiceService.stop();
+
+    final prompt = typedText.isEmpty
+        ? "Indha attached file-a simple Tanglish-la explain pannu. Important points-um kudu."
+        : typedText;
+
+    final displayText = attachedFile == null
+        ? prompt
+        : "📎 ${attachedFile.name}\n$prompt";
+
     controller.clear();
 
     setState(() {
       messages.add(
         ChatMessage(
-          text: text,
+          text: displayText,
           isUser: true,
         ),
       );
 
+      selectedFile = null;
       isLoading = true;
     });
 
-    final reply = await ApiService.askLumoon(text);
+    await saveCurrentChat();
+
+    final reply = attachedFile == null
+        ? await ApiService.askLumoon(prompt)
+        : await ApiService.askLumoonWithFile(
+            prompt: prompt,
+            filePath: attachedFile.path!,
+          );
 
     if (!mounted) return;
 
@@ -62,7 +150,51 @@ class _HomeScreenState extends State<HomeScreen> {
       isLoading = false;
     });
 
-    await widget.voiceService.speak(reply);
+    await saveCurrentChat();
+
+    if (!isMuted) {
+      await widget.voiceService.speak(reply);
+    }
+  }
+
+  Future<void> pickAttachment() async {
+    if (isLoading) return;
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: [
+        "pdf",
+        "doc",
+        "docx",
+        "xls",
+        "xlsx",
+        "ppt",
+        "pptx",
+        "txt",
+        "csv",
+        "png",
+        "jpg",
+        "jpeg",
+        "webp",
+        "mp4",
+        "mov",
+        "webm",
+      ],
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    final file = result.files.first;
+    const maxFileSize = 20 * 1024 * 1024;
+
+    if (file.size > maxFileSize) {
+      showMessage("20 MB-kulla irukkura file mattum select pannu macha.");
+      return;
+    }
+
+    setState(() {
+      selectedFile = file;
+    });
   }
 
   Future<void> micPressed() async {
@@ -108,22 +240,110 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     if (!started) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Microphone access not available"),
-        ),
-      );
+      showMessage("Microphone access available illa macha.");
     }
   }
 
-  Future<void> clearChat() async {
+  Future<void> createNewChat() async {
     await widget.voiceService.stop();
     await speechService.stopListening();
 
     setState(() {
       messages.clear();
+      selectedFile = null;
+      currentSession = ChatSession.create();
       isListening = false;
     });
+  }
+
+  Future<void> openChat(ChatSession session) async {
+    await widget.voiceService.stop();
+    await speechService.stopListening();
+
+    setState(() {
+      currentSession = session;
+      selectedFile = null;
+      isListening = false;
+
+      messages
+        ..clear()
+        ..addAll(
+          session.messages.map(
+            (message) => ChatMessage(
+              text: message.text,
+              isUser: message.isUser,
+            ),
+          ),
+        );
+    });
+  }
+
+  Future<void> deleteChat(ChatSession session) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.grey.shade900,
+          title: const Text(
+            "Delete chat?",
+            style: TextStyle(color: Colors.white),
+          ),
+          content: Text(
+            "\"${session.title}\" chat delete aagum.",
+            style: const TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text(
+                "Delete",
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldDelete != true) return;
+
+    setState(() {
+      chatSessions.removeWhere((chat) => chat.id == session.id);
+
+      if (currentSession.id == session.id) {
+        messages.clear();
+        selectedFile = null;
+        currentSession = ChatSession.create();
+      }
+    });
+
+    await chatStorageService.saveSessions(chatSessions);
+  }
+
+  void toggleMute() {
+    setState(() {
+      isMuted = !isMuted;
+    });
+
+    if (isMuted) {
+      widget.voiceService.stop();
+      showMessage("Lumoon voice muted.");
+    } else {
+      showMessage("Lumoon voice unmuted.");
+    }
+  }
+
+  void showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.grey.shade900,
+      ),
+    );
   }
 
   @override
@@ -138,75 +358,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      drawer: buildChatDrawer(),
       body: SafeArea(
         child: Column(
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 14,
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.cyan.withOpacity(0.15),
-                      border: Border.all(
-                        color: Colors.cyanAccent,
-                        width: 2,
-                      ),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.cyan,
-                          blurRadius: 15,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.memory,
-                      color: Colors.cyanAccent,
-                      size: 28,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "LUMOON",
-                          style: TextStyle(
-                            color: Colors.cyanAccent,
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        SizedBox(height: 2),
-                        Text(
-                          "AI Core Online",
-                          style: TextStyle(
-                            color: Colors.white54,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: clearChat,
-                    tooltip: "Clear chat",
-                    icon: const Icon(
-                      Icons.delete_outline,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            buildHeader(),
             Expanded(
               child: messages.isEmpty
                   ? const Center(
@@ -301,18 +457,253 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                12,
-                6,
-                12,
-                12,
+            if (selectedFile != null)
+              Container(
+                margin: const EdgeInsets.fromLTRB(14, 0, 14, 5),
+                padding: const EdgeInsets.only(left: 12),
+                decoration: BoxDecoration(
+                  color: Colors.cyan.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.cyanAccent.withOpacity(0.40),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.attach_file,
+                      color: Colors.cyanAccent,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        selectedFile!.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          selectedFile = null;
+                        });
+                      },
+                      icon: const Icon(
+                        Icons.close,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                    ),
+                  ],
+                ),
               ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
               child: ChatInput(
                 controller: controller,
                 onSend: sendMessage,
                 onMic: micPressed,
+                onAttach: pickAttachment,
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 14,
+      ),
+      child: Row(
+        children: [
+          Builder(
+            builder: (scaffoldContext) {
+              return IconButton(
+                onPressed: () {
+                  Scaffold.of(scaffoldContext).openDrawer();
+                },
+                tooltip: "Saved chats",
+                icon: const Icon(
+                  Icons.menu,
+                  color: Colors.white70,
+                ),
+              );
+            },
+          ),
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.cyan.withOpacity(0.15),
+              border: Border.all(
+                color: Colors.cyanAccent,
+                width: 2,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Colors.cyan,
+                  blurRadius: 15,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.memory,
+              color: Colors.cyanAccent,
+              size: 28,
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "LUMOON",
+                  style: TextStyle(
+                    color: Colors.cyanAccent,
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  "AI Core Online",
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: createNewChat,
+            tooltip: "New chat",
+            icon: const Icon(
+              Icons.edit_square,
+              color: Colors.cyanAccent,
+            ),
+          ),
+          IconButton(
+            onPressed: toggleMute,
+            tooltip: isMuted ? "Unmute voice" : "Mute voice",
+            icon: Icon(
+              isMuted ? Icons.volume_off : Icons.volume_up,
+              color: isMuted ? Colors.white54 : Colors.cyanAccent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildChatDrawer() {
+    return Drawer(
+      backgroundColor: Colors.grey.shade950,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.memory,
+                    color: Colors.cyanAccent,
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      "Lumoon Chats",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.close,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await createNewChat();
+                  },
+                  icon: const Icon(Icons.edit_square),
+                  label: const Text("New chat"),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.cyanAccent,
+                    side: const BorderSide(color: Colors.cyanAccent),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Divider(color: Colors.white12),
+            Expanded(
+              child: chatSessions.isEmpty
+                  ? const Center(
+                      child: Text(
+                        "Saved chats inga varum.",
+                        style: TextStyle(color: Colors.white38),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: chatSessions.length,
+                      itemBuilder: (context, index) {
+                        final chat = chatSessions[index];
+                        final isCurrent = chat.id == currentSession.id;
+
+                        return ListTile(
+                          selected: isCurrent,
+                          selectedTileColor: Colors.cyan.withOpacity(0.12),
+                          leading: const Icon(
+                            Icons.chat_bubble_outline,
+                            color: Colors.cyanAccent,
+                            size: 20,
+                          ),
+                          title: Text(
+                            chat.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                          trailing: IconButton(
+                            onPressed: () => deleteChat(chat),
+                            tooltip: "Delete chat",
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              color: Colors.white54,
+                              size: 20,
+                            ),
+                          ),
+                          onTap: () async {
+                            Navigator.pop(context);
+                            await openChat(chat);
+                          },
+                        );
+                      },
+                    ),
             ),
           ],
         ),
@@ -405,5 +796,17 @@ class ChatBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+extension FirstOrNullExtension<T> on Iterable<T> {
+  T? get firstOrNull {
+    final iterator = this.iterator;
+
+    if (iterator.moveNext()) {
+      return iterator.current;
+    }
+
+    return null;
   }
 }

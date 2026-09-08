@@ -1,10 +1,31 @@
 const express = require("express");
-const { GoogleGenAI } = require("@google/genai");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const multer = require("multer");
+const {
+  GoogleGenAI,
+  createUserContent,
+  createPartFromUri,
+} = require("@google/genai");
 
 const router = express.Router();
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
+});
+
+const uploadFolder = path.join(os.tmpdir(), "lumoon-uploads");
+
+if (!fs.existsSync(uploadFolder)) {
+  fs.mkdirSync(uploadFolder, { recursive: true });
+}
+
+const upload = multer({
+  dest: uploadFolder,
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20 MB
+  },
 });
 
 const LUMOON_PERSONALITY = `
@@ -26,11 +47,7 @@ Your personality:
 - Your name is Lumoon.
 
 Language style:
-- Use easy Tanglish such as:
-  "Macha, Flutter na oru UI framework."
-  "Idha simple-a sonna..."
-  "First indha step pannunga."
-- You may use Tamil script when it makes the explanation easier, but prefer readable Tanglish for most replies.
+- Use easy Tanglish.
 - Do not force Tanglish into code, commands, filenames, or technical syntax.
 
 Answer style:
@@ -40,41 +57,89 @@ Answer style:
 - For coding help, explain what to do first, then give the code.
 `;
 
-router.post("/", async (req, res) => {
-  try {
-    const { prompt } = req.body;
+router.post(
+  "/",
+  (req, res, next) => {
+    upload.single("file")(req, res, (error) => {
+      if (error) {
+        const message =
+          error.code === "LIMIT_FILE_SIZE"
+            ? "File size 20 MB-kulla irukkanum."
+            : error.message || "File upload error.";
 
-    if (!prompt || prompt.trim() === "") {
-      return res.status(400).json({
-        success: false,
-        error: "Prompt is required",
+        return res.status(400).json({
+          success: false,
+          error: message,
+        });
+      }
+
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      const typedPrompt = req.body?.prompt?.trim() || "";
+      const file = req.file;
+
+      if (!typedPrompt && !file) {
+        return res.status(400).json({
+          success: false,
+          error: "Question or file is required.",
+        });
+      }
+
+      const prompt =
+        typedPrompt ||
+        "Indha file-a simple Tanglish-la explain pannu. Important points-um kudu.";
+
+      console.log("User:", prompt);
+
+      let contents = prompt;
+
+      if (file) {
+        console.log("Attached file:", file.originalname);
+
+        const uploadedFile = await ai.files.upload({
+          file: file.path,
+          config: {
+            mimeType: file.mimetype,
+            displayName: file.originalname,
+          },
+        });
+
+        contents = createUserContent([
+          createPartFromUri(uploadedFile.uri, uploadedFile.mimeType),
+          prompt,
+        ]);
+      }
+
+      const result = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: contents,
+        config: {
+          systemInstruction: LUMOON_PERSONALITY,
+        },
       });
+
+      console.log("AI:", result.text);
+
+      res.json({
+        success: true,
+        reply: result.text ?? "Sorry macha, response varala.",
+      });
+    } catch (error) {
+      console.error("Gemini Error:", error);
+
+      res.status(500).json({
+        success: false,
+        error: error.message || "Server Error",
+      });
+    } finally {
+      if (req.file?.path) {
+        fs.promises.unlink(req.file.path).catch(() => {});
+      }
     }
-
-    console.log("User:", prompt);
-
-    const result = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: LUMOON_PERSONALITY,
-      },
-    });
-
-    console.log("AI:", result.text);
-
-    res.json({
-      success: true,
-      reply: result.text ?? "Sorry macha, response varala.",
-    });
-  } catch (error) {
-    console.error("Gemini Error:", error);
-
-    res.status(500).json({
-      success: false,
-      error: error.message || "Server Error",
-    });
   }
-});
+);
 
 module.exports = router;
